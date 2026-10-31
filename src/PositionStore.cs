@@ -26,8 +26,12 @@ internal static class PositionStore
 
     private static readonly Dictionary<string, Entry> Changed = new(StringComparer.OrdinalIgnoreCase);
 
-    private static string FilePath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "imageviewer", "positions.tsv");
+    /// <summary>%LOCALAPPDATA%\imageviewer\positions.tsv, or positions.tsv in %IMAGEVIEWER_DATA_DIR% (used by the tests).</summary>
+    private static string FilePath => Path.Combine(
+        Environment.GetEnvironmentVariable("IMAGEVIEWER_DATA_DIR") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "imageviewer"),
+        "positions.tsv");
 
     public static bool TryGet(string path, out int x, out int y, out double scale)
     {
@@ -60,7 +64,7 @@ internal static class PositionStore
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             string tmp = file + ".tmp";
             File.WriteAllText(tmp, sb.ToString(), new UTF8Encoding(false));
-            if (File.Exists(file)) File.Replace(tmp, file, null);
+            if (File.Exists(file)) File.Replace(tmp, file, null, true); // true: also on drives that cannot copy file attributes (e.g. \\wsl.localhost)
             else File.Move(tmp, file);
             Changed.Clear();
         }

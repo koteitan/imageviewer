@@ -32,12 +32,29 @@ internal static class ImageLoader
         BitmapFrame frame = decoder is IconBitmapDecoder
             ? decoder.Frames.OrderByDescending(f => (long)f.PixelWidth * f.PixelHeight).First()
             : decoder.Frames[0];
-        BitmapSource result = ApplyOrientation(frame, ReadOrientation(frame));
+        BitmapSource result = ApplyOrientation(PixelsWithAlpha(decoder, frame, fs), ReadOrientation(frame));
         if (result.CanFreeze) result.Freeze();
         return result;
     }
 
-    private static int ReadOrientation(BitmapFrame frame)
+    private static readonly Guid WebPContainer = new("e094b0e2-67f2-45b3-b0ea-115337ca7cf3");
+
+    /// <summary>
+    /// The pixels of <paramref name="frame"/>, keeping transparency for WebP. Decoded the usual way
+    /// (BitmapCreateOptions.None), the Windows WebP decoder hands out Bgr32 and the alpha channel is lost;
+    /// its own RGBA format (kept with PreservePixelFormat) is converted to Bgra32 here instead.
+    /// </summary>
+    public static BitmapSource PixelsWithAlpha(BitmapDecoder decoder, BitmapFrame frame, Stream stream)
+    {
+        if (decoder.CodecInfo?.ContainerFormat != WebPContainer || !stream.CanSeek) return frame;
+        stream.Position = 0;
+        var native = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+        var bgra = new FormatConvertedBitmap(native, PixelFormats.Bgra32, null, 0);
+        bgra.Freeze();
+        return bgra;
+    }
+
+    public static int ReadOrientation(BitmapFrame frame)
     {
         try
         {
@@ -51,8 +68,21 @@ internal static class ImageLoader
         return 1;
     }
 
+    /// <summary>EXIF orientation 1..8 as "flip horizontally (if <c>flip</c>), then rotate clockwise by <c>degrees</c>".</summary>
+    public static (int degrees, bool flip) OrientationParts(int orientation) => orientation switch
+    {
+        2 => (0, true),
+        3 => (180, false),
+        4 => (180, true),   // flip vertical = flip horizontal + 180
+        5 => (270, true),   // transpose
+        6 => (90, false),
+        7 => (90, true),    // transverse
+        8 => (270, false),
+        _ => (0, false),
+    };
+
     /// <summary>EXIF orientation 1..8 -> upright bitmap.</summary>
-    private static BitmapSource ApplyOrientation(BitmapSource src, int orientation)
+    public static BitmapSource ApplyOrientation(BitmapSource src, int orientation)
     {
         Transform? t = orientation switch
         {
@@ -68,15 +98,28 @@ internal static class ImageLoader
         return t is null ? src : new TransformedBitmap(src, t);
     }
 
-    /// <summary>Images in the folder, oldest first (ties broken by name).</summary>
-    public static List<FileInfo> ListFolder(string dir)
+    /// <summary>Images in the folder ordered by <paramref name="timeOf"/>, oldest first (ties broken by name).</summary>
+    public static List<FileInfo> ListFolder(string dir, Func<FileInfo, DateTime> timeOf)
     {
         var files = new DirectoryInfo(dir).EnumerateFiles().Where(f => IsImage(f.Name)).ToList();
-        files.Sort(CompareByTime);
+        files.Sort((a, b) => CompareKey(timeOf(a), a.Name, timeOf(b), b.Name));
         return files;
     }
 
-    public static int CompareByTime(FileInfo a, FileInfo b) => CompareKey(a.LastWriteTimeUtc, a.Name, b.LastWriteTimeUtc, b.Name);
+    /// <summary>Last write time of every image in the folder now.</summary>
+    public static Dictionary<string, DateTime> SnapshotTimes(string dir)
+    {
+        var map = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var f in new DirectoryInfo(dir).EnumerateFiles())
+                if (IsImage(f.Name)) map[f.FullName] = f.LastWriteTimeUtc;
+        }
+        catch (Exception)
+        {
+        }
+        return map;
+    }
 
     public static int CompareKey(DateTime ta, string na, DateTime tb, string nb)
     {

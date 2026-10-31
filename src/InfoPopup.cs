@@ -20,16 +20,20 @@ namespace ImageViewer;
 /// ファイル名:     [copy] [....]
 /// フルパス  :     [copy] [....]
 /// ペイントで開く: [開く]
+/// 回転:           [保存] (only while the view is rotated)
 /// </code>
 /// </summary>
 internal sealed class InfoPopup : Window
 {
     private const double ShadowMargin = 14;     // transparent margin around the card for the drop shadow
     private readonly ViewerWindow owner;
-    private readonly ResourceDictionary theme = LoadTheme();
+    private readonly ResourceDictionary theme = Theme.Load();
     private readonly TextBox zoomBox;
     private readonly TextBox nameBox;
     private readonly TextBox pathBox;
+    private readonly TextBlock rotateLabel;
+    private readonly Button saveButton;
+    private readonly TextBlock rotateInfo;
 
     public InfoPopup(ViewerWindow owner)
     {
@@ -44,7 +48,7 @@ internal sealed class InfoPopup : Window
         // fixed width: every button has the same width, also while showing "✓ copied"
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ButtonWidth + Cell.Right) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        for (int i = 0; i < 4; i++) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (int i = 0; i < 5; i++) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         // 拡大率: [100%] [...]%
         Add(grid, Label("拡大率"), 0, 0);
@@ -74,6 +78,15 @@ internal sealed class InfoPopup : Window
         paint.Click += (_, _) => OpenInPaint();
         Add(grid, paint, 3, 1);
 
+        // 回転: [保存] 右に 90°   (or why it cannot be saved)
+        rotateLabel = Label("回転");
+        Add(grid, rotateLabel, 4, 0);
+        saveButton = MakeButton("保存");
+        saveButton.Click += (_, _) => { owner.SaveRotation(); RefreshIfVisible(); };
+        Add(grid, saveButton, 4, 1);
+        rotateInfo = new TextBlock { Style = ThemeStyle("Unit"), TextWrapping = TextWrapping.Wrap, MaxWidth = 380, Margin = new Thickness(2, 0, 0, 0) };
+        Add(grid, rotateInfo, 4, 2);
+
         var card = new Border
         {
             Child = grid,
@@ -81,7 +94,7 @@ internal sealed class InfoPopup : Window
             Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 3, Direction = 270, Opacity = 0.55, Color = Colors.Black },
         };
         card.Resources = theme;
-        TextElementProps(card);
+        Theme.ApplyText(card);
         card.PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape) { HideAndReturn(); e.Handled = true; }
@@ -110,9 +123,7 @@ internal sealed class InfoPopup : Window
     /// <summary>Show with the card's top-left corner at the mouse cursor, kept inside the work area.</summary>
     public void Open()
     {
-        RefreshZoom();
-        nameBox.Text = Path.GetFileName(owner.FilePath);
-        pathBox.Text = owner.FilePath;
+        Refresh();
 
         Opacity = 0; // invisible until it is at the right place
         Show();
@@ -128,6 +139,33 @@ internal sealed class InfoPopup : Window
         Opacity = 1;
         zoomBox.Focus();
         zoomBox.SelectAll();
+    }
+
+    /// <summary>Update the contents if the view is open (the image was rotated or saved meanwhile).</summary>
+    public void RefreshIfVisible()
+    {
+        if (IsVisible) Refresh();
+    }
+
+    private void Refresh()
+    {
+        RefreshZoom();
+        nameBox.Text = Path.GetFileName(owner.FilePath);
+        pathBox.Text = owner.FilePath;
+
+        int r = owner.Rotation;
+        var show = r == 0 ? Visibility.Collapsed : Visibility.Visible;
+        rotateLabel.Visibility = saveButton.Visibility = rotateInfo.Visibility = show;
+        if (r == 0) return;
+        var mode = owner.RotationSavePlan(out string reason);
+        saveButton.IsEnabled = mode != ImageSaver.Mode.Blocked;
+        string angle = r switch { 90 => "右に 90°", 180 => "180°", _ => "左に 90°" };
+        rotateInfo.Text = mode switch
+        {
+            ImageSaver.Mode.Overwrite => angle + "(上書き保存します)",
+            ImageSaver.Mode.OverwriteLossy => angle + "(上書き保存します。" + reason + ")",
+            _ => angle + " — " + reason,
+        };
     }
 
     private void HideAndReturn()
@@ -175,13 +213,6 @@ internal sealed class InfoPopup : Window
     private const double RowHeight = 32;     // buttons and text boxes
 
     private Style ThemeStyle(string key) => (Style)theme[key];
-
-    private static void TextElementProps(Border card)
-    {
-        System.Windows.Documents.TextElement.SetFontFamily(card, new FontFamily("Segoe UI Variable Text, Yu Gothic UI, Segoe UI"));
-        System.Windows.Documents.TextElement.SetFontSize(card, 13);
-        TextOptions.SetTextFormattingMode(card, TextFormattingMode.Display);
-    }
 
     private static void Add(Grid grid, FrameworkElement e, int row, int col)
     {
@@ -240,129 +271,4 @@ internal sealed class InfoPopup : Window
         return false;
     }
 
-    // ---------------------------------------------------------------- theme
-
-    private static ResourceDictionary LoadTheme() => (ResourceDictionary)XamlReader.Parse(ThemeXaml);
-
-    /// <summary>Dark theme in the style of Windows 11 (Fluent) flyouts.</summary>
-    private const string ThemeXaml = """
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <SolidColorBrush x:Key="CardBrush" Color="#202020"/>
-  <SolidColorBrush x:Key="CardBorderBrush" Color="#3A3A3A"/>
-  <SolidColorBrush x:Key="TextBrush" Color="#F3F3F3"/>
-  <SolidColorBrush x:Key="LabelBrush" Color="#A6A6A6"/>
-  <SolidColorBrush x:Key="ControlBrush" Color="#2D2D2D"/>
-  <SolidColorBrush x:Key="ControlHoverBrush" Color="#383838"/>
-  <SolidColorBrush x:Key="ControlPressedBrush" Color="#262626"/>
-  <SolidColorBrush x:Key="ControlBorderBrush" Color="#3F3F3F"/>
-  <SolidColorBrush x:Key="InputBrush" Color="#1A1A1A"/>
-  <SolidColorBrush x:Key="AccentBrush" Color="#4CC2FF"/>
-  <SolidColorBrush x:Key="AccentHoverBrush" Color="#48B1E8"/>
-  <SolidColorBrush x:Key="AccentPressedBrush" Color="#42A1D2"/>
-  <SolidColorBrush x:Key="SuccessBrush" Color="#6CCB5F"/>
-  <SolidColorBrush x:Key="ErrorBrush" Color="#FF99A4"/>
-
-  <Style x:Key="Card" TargetType="Border">
-    <Setter Property="Background" Value="{StaticResource CardBrush}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
-    <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="CornerRadius" Value="8"/>
-    <Setter Property="Padding" Value="16,10,8,10"/>
-  </Style>
-
-  <Style x:Key="Label" TargetType="TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource LabelBrush}"/>
-    <Setter Property="FontSize" Value="12"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
-    <Setter Property="Margin" Value="0,4,16,4"/>
-  </Style>
-
-  <Style x:Key="Unit" TargetType="TextBlock">
-    <Setter Property="Foreground" Value="{StaticResource LabelBrush}"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
-    <Setter Property="Margin" Value="6,0,0,0"/>
-  </Style>
-
-  <Style x:Key="SubtleButton" TargetType="Button">
-    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-    <Setter Property="Background" Value="{StaticResource ControlBrush}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource ControlBorderBrush}"/>
-    <Setter Property="Padding" Value="12,4"/>
-    <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="Button">
-          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="1" CornerRadius="4" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{StaticResource ControlHoverBrush}"/>
-      </Trigger>
-      <Trigger Property="IsPressed" Value="True">
-        <Setter Property="Background" Value="{StaticResource ControlPressedBrush}"/>
-      </Trigger>
-    </Style.Triggers>
-  </Style>
-
-  <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource SubtleButton}">
-    <Setter Property="Foreground" Value="#000000"/>
-    <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{StaticResource AccentHoverBrush}"/>
-        <Setter Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
-      </Trigger>
-      <Trigger Property="IsPressed" Value="True">
-        <Setter Property="Background" Value="{StaticResource AccentPressedBrush}"/>
-        <Setter Property="BorderBrush" Value="{StaticResource AccentPressedBrush}"/>
-      </Trigger>
-    </Style.Triggers>
-  </Style>
-
-  <Style TargetType="TextBox">
-    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-    <Setter Property="Background" Value="{StaticResource ControlBrush}"/>
-    <Setter Property="BorderBrush" Value="{StaticResource ControlBorderBrush}"/>
-    <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
-    <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}"/>
-    <Setter Property="Padding" Value="8,0"/>
-    <Setter Property="VerticalContentAlignment" Value="Center"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="TextBox">
-          <Border x:Name="Box" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="1" CornerRadius="4" SnapsToDevicePixels="True">
-            <Grid>
-              <ScrollViewer x:Name="PART_ContentHost" Focusable="False" Margin="{TemplateBinding Padding}"
-                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                            HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
-              <Border x:Name="Underline" Height="2" VerticalAlignment="Bottom" Margin="1,0"
-                      CornerRadius="0,0,3,3" Background="Transparent"/>
-            </Grid>
-          </Border>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Box" Property="Background" Value="{StaticResource ControlHoverBrush}"/>
-            </Trigger>
-            <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="Box" Property="Background" Value="{StaticResource InputBrush}"/>
-              <Setter TargetName="Underline" Property="Background" Value="{StaticResource AccentBrush}"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
-  </Style>
-</ResourceDictionary>
-""";
 }

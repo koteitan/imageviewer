@@ -31,6 +31,7 @@ internal sealed class ViewerWindow
     private const int ResizeBorder = 16;          // width of the resize edges at 96 dpi
     private const double MinVisibleToRestore = 0.25; // a remembered place is used if at least this much is on a monitor
     private const string ClassName = "imageviewer.main";
+    private const long MK_CONTROL = 0x0008;
 
     private static readonly Dictionary<IntPtr, ViewerWindow> Windows = new();
     private static readonly Native.WndProcDelegate WndProcRef = StaticWndProc; // kept alive for native code
@@ -40,9 +41,16 @@ internal sealed class ViewerWindow
     private readonly IntPtr hwnd;
     private readonly InfoPopup popup;
 
-    private BitmapSource bitmap = null!;
+    private BitmapSource original = null!;        // the file as loaded (EXIF orientation applied)
+    private int rotation;                          // extra clockwise rotation by the user: 0, 90, 180, 270
+    private BitmapSource bitmap = null!;           // original rotated by `rotation` = what is shown
     private readonly List<BitmapSource> levels = new(); // levels[k] = bitmap shrunk by 2^k (built on demand)
     private string path;
+
+    // left/right order: last write times of the folder's images taken when the folder was first shown,
+    // so saving a file (which changes its time) does not move it in the order
+    private string? orderDir;
+    private Dictionary<string, DateTime> orderTimes = new(StringComparer.OrdinalIgnoreCase);
     private double scale = 1.0;
     private int imgX, imgY, imgW, imgH;           // image rectangle (see class comment)
 
@@ -76,12 +84,14 @@ internal sealed class ViewerWindow
         popup = new InfoPopup(this);
 
         UpdateTitle();
+        TakeOrderSnapshot();
         PlaceForCurrentImage();
     }
 
     public IntPtr Handle => hwnd;
     public string FilePath => path;
     public double Scale => scale;
+    public int Rotation => rotation;
 
     public void Show()
     {
@@ -164,7 +174,9 @@ internal sealed class ViewerWindow
                 return true;
 
             case Native.WM_MOUSEWHEEL:
-                OnMouseWheel(unchecked((short)((long)wParam >> 16)));
+                int delta = unchecked((short)((long)wParam >> 16));
+                if (((long)wParam & MK_CONTROL) != 0) Rotate(delta > 0 ? +1 : -1); // Ctrl+wheel: rotate
+                else OnMouseWheel(delta);
                 return true;
 
             case Native.WM_KEYDOWN:
@@ -491,16 +503,17 @@ internal sealed class ViewerWindow
         string? dir = Path.GetDirectoryName(path);
         if (dir is null || !Directory.Exists(dir)) return;
 
-        var files = ImageLoader.ListFolder(dir);
+        TakeOrderSnapshot();
+        var files = ImageLoader.ListFolder(dir, OrderTime);
         var cur = new FileInfo(path);
-        DateTime curTime = cur.Exists ? cur.LastWriteTimeUtc : lastKnownWriteTime;
+        DateTime curTime = orderTimes.TryGetValue(cur.FullName, out var t) ? t : cur.Exists ? cur.LastWriteTimeUtc : lastKnownWriteTime;
         string curName = cur.Name;
 
         // Start at the neighbor of the current position (works even if the current file was deleted).
         // Past the newest/oldest image, wrap around to the other end.
         int i = direction > 0
-            ? files.FindIndex(f => ImageLoader.CompareKey(f.LastWriteTimeUtc, f.Name, curTime, curName) > 0)
-            : files.FindLastIndex(f => ImageLoader.CompareKey(f.LastWriteTimeUtc, f.Name, curTime, curName) < 0);
+            ? files.FindIndex(f => ImageLoader.CompareKey(OrderTime(f), f.Name, curTime, curName) > 0)
+            : files.FindLastIndex(f => ImageLoader.CompareKey(OrderTime(f), f.Name, curTime, curName) < 0);
         if (i < 0) i = direction > 0 ? 0 : files.Count - 1;
 
         // Visit every file at most once; skip the current one and files that fail to load.
@@ -533,6 +546,7 @@ internal sealed class ViewerWindow
         path = Path.GetFullPath(file);
         SetBitmap(bmp);
         UpdateTitle();
+        TakeOrderSnapshot();
         if (keepPlace)
         {
             scale = InitialScale(bitmap.PixelWidth, bitmap.PixelHeight);
@@ -546,8 +560,97 @@ internal sealed class ViewerWindow
         return true;
     }
 
+    /// <summary>Snapshot of the last write times, taken once per folder (see orderTimes).</summary>
+    private void TakeOrderSnapshot()
+    {
+        string? dir = Path.GetDirectoryName(path);
+        if (dir is null || string.Equals(dir, orderDir, StringComparison.OrdinalIgnoreCase)) return;
+        orderDir = dir;
+        orderTimes = ImageLoader.SnapshotTimes(dir);
+    }
+
+    /// <summary>Time used for the left/right order: the snapshot, or the file's own time for new files.</summary>
+    private DateTime OrderTime(FileInfo f) => orderTimes.TryGetValue(f.FullName, out var t) ? t : f.LastWriteTimeUtc;
+
+    // ---------------------------------------------------------------- rotation
+
+    /// <summary>Rotate the view by quarter turns (+1 = clockwise) around the image center.</summary>
+    private void Rotate(int quarterTurns)
+    {
+        rotation = ((rotation + 90 * quarterTurns) % 360 + 360) % 360;
+        ShowRotated();
+        popup.RefreshIfVisible();
+    }
+
+    private void ShowRotated()
+    {
+        int cx = imgX + imgW / 2, cy = imgY + imgH / 2;
+        if (rotation == 0)
+        {
+            bitmap = original;
+        }
+        else
+        {
+            var rotated = new WriteableBitmap(new TransformedBitmap(original, new RotateTransform(rotation)));
+            rotated.Freeze();
+            bitmap = rotated;
+        }
+        levels.Clear();
+        levels.Add(bitmap);
+        scale = ClampScale(scale);
+        int w = ScaledSide(bitmap.PixelWidth, scale), h = ScaledSide(bitmap.PixelHeight, scale);
+        SetImageRect(cx - w / 2, cy - h / 2, w, h);
+    }
+
+    /// <summary>How the rotated image would be saved (see <see cref="ImageSaver.Plan"/>).</summary>
+    public ImageSaver.Mode RotationSavePlan(out string reason) => ImageSaver.Plan(path, out reason);
+
+    /// <summary>
+    /// Save the current rotation into the file, then show the saved file.
+    /// A WebP cannot be written: the user picks JPG or PNG and a new file is made next to it.
+    /// </summary>
+    public void SaveRotation()
+    {
+        if (rotation == 0) return;
+        try
+        {
+            switch (ImageSaver.Plan(path, out string reason))
+            {
+                case ImageSaver.Mode.Blocked:
+                    throw new NotSupportedException(reason);
+
+                case ImageSaver.Mode.ConvertWebP:
+                    int format = ChoiceDialog.Show(hwnd,
+                        "WebP は保存できないので、別の形式で保存します。\n形式を選んでください。",
+                        new[] { "JPG", "PNG", "キャンセル" }, cancelIndex: 2);
+                    if (format == 2) return;
+                    string target = Path.ChangeExtension(path, format == 0 ? ".jpg" : ".png");
+                    if (File.Exists(target)
+                        && ChoiceDialog.Show(hwnd, $"{Path.GetFileName(target)} はもうあります。上書きしますか?",
+                               new[] { "上書き", "キャンセル" }, cancelIndex: 1) != 0)
+                        return;
+                    ImageSaver.SaveConverted(path, rotation, format == 0 ? ImageSaver.Kind.Jpeg : ImageSaver.Kind.Png, target);
+                    path = target;
+                    UpdateTitle();
+                    break;
+
+                default:
+                    ImageSaver.SaveRotated(path, rotation);
+                    break;
+            }
+            SetBitmap(ImageLoader.Load(path)); // rotation back to 0: the file itself is rotated now
+            ShowRotated();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"保存できませんでした。\n{path}\n\n{ex.Message}", "imageviewer", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SetBitmap(BitmapSource bmp)
     {
+        original = bmp;
+        rotation = 0;
         bitmap = bmp;
         levels.Clear();
         levels.Add(bmp);

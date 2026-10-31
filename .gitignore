@@ -2,3 +2,6 @@ bin/
 obj/
 *.user
 .vs/
+test/.venv/
+test/out/
+__pycache__/
