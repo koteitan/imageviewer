@@ -1,0 +1,222 @@
+# 回転仕様
+- 開くファイルに回転プロパティがあった場合
+- ctrl+wheel で表示回転後に保存した場合
+の仕様についてまとめる。
+
+## 共通
+### imageviewer の動作仕様
+- ファイルの形式は、拡張子ではなく中身の先頭のバイトで判断する。
+  - 例: 拡張子が `.webp` で中身が JPEG のファイルは、JPEG として扱い、元の名前で保存する。
+- 開いたとき: Windows の画像部品(WIC)が返す向きの値(System.Photo.Orientation, 1〜8)に従って回して表示する。どの形式のどの情報を WIC が向きの値として返すかは、形式ごとの節に書く。
+- ctrl+wheel: 表示を 90° 単位で回す(奥に回すと右回り)。
+- 回した状態で右クリックビューの「回転: 保存」を押すと、表示している向きのとおりに保存する。保存のしかたは形式ごとの節に書く。
+- 保存は、同じフォルダに一時ファイルを書いてから元のファイルと入れ替える。
+- 左右キーの順番は、フォルダを最初に開いたときの更新日時で決める。
+
+## PNG
+### ファイル仕様
+- PNG では、画像の回転情報を保持するための仕様は存在しない。
+- 画素は、表示する並び(左上から右へ、上の行から下の行へ)で保存される。
+#### 補足情報: eXIf チャンク
+- eXIf チャンクに EXIF を入れられる。EXIF の中に向きの値(Orientation, 1〜8)を書ける。
+- 書けるが、仕様としてはそのまま表示することが望まれている。
+  - 11.3.4.5 節: EXIF が正しいと別の方法で分かっている場合を除いて、EXIF の内容は「過去の記録」としてだけ扱うことが勧められている。
+  - eXIf とほかのチャンクの内容が食い違ったときの扱いは、仕様の範囲外。
+  - 向き(Orientation)の扱いについての記述はない。
+#### 補足情報: XMP
+- 一応XMP の中に tiff:Orientation(向きの値 1〜8)を書ける
+- png ではなく XMP の仕様。
+- XMP は iTXt チャンク(キーワード `XML:com.adobe.xmp`)に入れる。
+### imageviewer の動作仕様
+- 開いたとき:
+  - eXIf の向きの値は使わない(WIC が返さない)。
+  - WIC が向きの値として返す XMP の tiff:Orientation は使う。
+- 保存したとき:
+  - 画素単位で回転して保存する。
+  - XMP に tiff:Orientation があるときは、その値を 1 にする。
+### imageviewer の保存時の副作用
+- 圧縮データ(IDAT)を作り直すので、ファイルの大きさが変わる(例: 130,201 → 105,435 バイト)。PNG の圧縮は可逆。
+- gAMA チャンク(値 45455 = ガンマ値 0.45455)が増える。WPF の PNG 書き出し部品が足すため。sRGB チャンクがあれば、読む側はそちらを優先する。
+- チャンクの並びが変わる(例: eXIf が pHYs の後ろに移る)。
+- XMP(iTXt)の書き方(要素の並べ方)が変わる。
+- XMP の tiff:Orientation は 1 になる。
+
+## JPEG
+### ファイル仕様
+- JPEG(JFIF)では、画像の回転情報を保持するための仕様は存在しない。
+#### 補足情報: EXIF
+- APP1 の EXIF に向きの値(Orientation, 1〜8)を書ける。EXIF の仕様(JEITA CP-3451)。
+- カメラやスマホは、画素をセンサーの向きのまま保存して、向きの値で表示の向きを指定することが多い(例: iPhone の縦向きの写真は 6 = 右に 90° 回して表示)。
+- EXIF には小さなサムネイル(IFD1)を入れられる。サムネイルも同じ向きの値に従う。
+#### 補足情報: XMP
+- APP1 の XMP に tiff:Orientation を書ける。XMP の仕様。
+### imageviewer の動作仕様
+- 開いたとき: EXIF の向きの値に従って回して表示する。
+- 保存したとき:
+  - 縦と横が両方 16 の倍数のときだけ保存できる。そうでないときは保存ボタンを押せない。
+  - 圧縮したデータ(8x8 画素のブロックごとの周波数の値)のまま回す。
+    - WIC の JPEG 書き出し部品は、回転・左右反転・上下反転のうち 1 つだけなら劣化なしで行う。2 つを同時に頼むと圧縮し直す。そのため、左右反転と 90°/270° 回転が両方必要なとき(元の向きの値が 5 または 7 のときなど)は、2 回に分けて行う。
+  - 付属情報(APP0〜APP15, COM)は、元のファイルのものを写す。
+  - 写した付属情報のうち、次だけを書き換える。
+    - EXIF の向きの値 → 1。理由: 画素を表示の向きに並べ直したので、元の値のままだと EXIF に従うアプリが二重に回すため。
+    - EXIF の PixelXDimension / PixelYDimension(画像の幅と高さ、単位は画素) → 回したあとの値。理由: 90°/270° 回すと幅と高さが入れ替わるため。
+    - EXIF のサムネイル(IFD1)への参照 → 外す。理由: サムネイルは回していないため。
+    - XMP の tiff:Orientation → 1。XMP の exif:PixelXDimension / exif:PixelYDimension → 回したあとの値(元の値と文字数が等しい場合)。(XMP 付きの JPEG ではテストしていない)
+  - MPF(APP2, 1 つの JPEG に複数の画像を入れる仕組み)の部分は外す。理由: MPF が指す、ファイルの末尾に付いた画像が消えるため。
+### imageviewer の保存時の副作用
+- EXIF の向きの値、PixelXDimension / PixelYDimension、サムネイルへの参照が変わる(上記)。
+- 量子化表とハフマン表を入れる区切り方が変わる(元: 1 つの区切りにまとめて入れる → WIC: 表ごとに別の区切り)。
+- 圧縮データのバイトが変わる。ブロックの順番と各ブロックの中の値の並びが変わるため、符号の並びと長さが変わる(例: 2,174,344 → 2,172,334 バイト)。
+- ファイルの末尾(EOI の後ろ)に付いていたデータは無くなる(例: MPF の 2 枚目以降の画像)。
+- 開いたときの表示は、保存前と比べて画素の値(0〜255)で最大 2〜3 違うことがある。保存したデータではなく、読み込むときの計算の丸めによる(rotation-diff.md を参照)。
+
+## HEIC / HEIF
+### ファイル仕様
+- HEIF(ISO/IEC 23008-12)には、表示するときにかける変換のプロパティがある。
+  - irot: 回転。左回りに 90° 単位。
+  - imir: 反転。
+  - clap: 切り抜き。
+- 変換は、ipma(画像とプロパティの対応表)に並んだ順にかける。
+- MIAF(ISO/IEC 23000-22)では、irot と imir は「必ず処理する」印(essential)を付けることになっている。
+- 圧縮した画像データ(HEVC)は変換前の向きのまま。読む側が irot / imir をかけて表示する。
+#### 補足情報: EXIF
+- EXIF を別の項目(Exif アイテム)として入れられる。EXIF の向きの値も書ける。
+- libavif の資料によると、MIAF では EXIF の向きは変換として使わない(二次情報。MIAF の原文は未確認)。
+- iPhone の HEIC は irot と EXIF の向きの値の両方を持っていて、2 つは同じ向きを表している。
+### imageviewer の動作仕様
+- 開いたとき: WIC が irot / imir をかけた画像を返すので、それを表示する。EXIF の向きの値は使わない(WIC が 1 を返す)。
+- 保存したとき:
+  - 主画像(pitm が指す画像)の irot を書き換える。
+    - irot があるとき: 角度の値(1 バイト)をその場で書き換える。右に r° 回したとき、新しい角度 = 元の角度 − r(左回りの角度なので引く)。imir が irot より後ろにあるときは、反転で回る向きが逆になるので + r。
+    - irot がないとき: irot の箱(9 バイト)を足して、主画像との対応を ipma に足す。imir があればその前に、なければ最後に入れる。
+  - EXIF に向きの値があるときは、irot / imir をかけた結果を表す値に書き換える。
+  - 次のファイルは保存できない。
+    - clap が irot より後ろにあるもの(角度を変えると切り抜きの意味が変わるため)
+    - 動く HEIF(moov 箱があるもの)
+### imageviewer の保存時の副作用
+- irot を足したときは、ファイルが 10〜11 バイト増える(irot の箱 9 バイト + ipma の対応 1〜2 バイト)。足したときは、画像データの位置(iloc の値)を、増えたバイト数だけずらす。
+- サムネイルなど、主画像と同じ irot を使っている画像も一緒に回る。
+- 回したファイルを WIC で読んだ絵は、元を WIC で読んで回した絵と、画素の値(0〜255)で最大 6 違うことがある。ファイルではなく、WIC の読み込み処理による(rotation-diff.md を参照)。
+
+## AVIF
+### ファイル仕様
+- HEIF と同じ入れ物で、画像データが AV1。irot / imir / clap と EXIF の扱いは HEIC / HEIF の節と同じ。
+### imageviewer の動作仕様
+- HEIC / HEIF の節と同じ。
+### imageviewer の保存時の副作用
+- HEIC / HEIF の節と同じ。
+
+## WebP
+### ファイル仕様
+- WebP(RFC 9649)では、画像の回転情報を保持するための仕様は存在しない。
+#### 補足情報: EXIF / XMP チャンク
+- EXIF チャンクと XMP チャンクを入れられる。EXIF の向きの値、XMP の tiff:Orientation を書ける。
+- RFC 9649 は、これらが表示に影響するかどうかを書いていない。扱いは Metadata Working Group の指針を参照するよう書かれている。
+### imageviewer の動作仕様
+- 開いたとき: EXIF の向きの値に従って回して表示する(WIC が返す)。
+- 保存したとき:
+  - WIC に WebP の書き出し部品がないので、WebP では保存できない。
+  - 「WebP は保存できないので、別の形式で保存します」と出して、JPG・PNG・キャンセルから選ばせる。
+  - 同じフォルダに、同じ名前で拡張子だけ変えたファイルを作る(例: `photo.webp` → `photo.jpg`)。同じ名前のファイルがあれば、上書きするか聞く。
+  - 画素は、表示している向きのとおりに回す。
+  - JPG: 画質 95 で圧縮する。透明な部分は白にする。
+  - 保存したあとは、新しいファイルを表示する。
+### imageviewer の保存時の副作用
+- 新しいファイルには EXIF / XMP が入らない(消える)。
+- JPG を選んだときは劣化する(圧縮し直すため)。
+
+## GIF
+### ファイル仕様
+- GIF では、画像の回転情報を保持するための仕様は存在しない。
+### imageviewer の動作仕様
+- 開いたとき: 保存された並びのまま表示する(複数のコマがあるときは 1 コマ目)。
+- 保存したとき: 画素単位で回転して保存する。コマが 2 つ以上あるものは保存できない。
+### imageviewer の保存時の副作用
+- 圧縮し直すので、ファイルの大きさが変わる(例: 268 → 239 バイト)。
+
+## BMP
+### ファイル仕様
+- BMP では、画像の回転情報を保持するための仕様は存在しない。
+### imageviewer の動作仕様
+- 開いたとき: 保存された並びのまま表示する。
+- 保存したとき: 画素単位で回転して保存する。
+### imageviewer の保存時の副作用
+-
+
+## TIFF
+### ファイル仕様
+- TIFF 6.0 には向きのタグ(Orientation, 274 番, 値 1〜8)がある。
+- 基本の TIFF(Baseline)では、1 以外の値に対応することは必須ではない(二次情報。TIFF 6.0 の原文は未確認)。
+### imageviewer の動作仕様
+- 開いたとき: 向きのタグに従って回して表示する(WIC が返す)。
+- 保存したとき:
+  - 画素単位で回転して保存する。向きのタグは 1 にする。
+  - ページが 2 つ以上あるものは保存できない。
+### imageviewer の保存時の副作用
+- WPF の TIFF 書き出し部品の設定で書き直すので、圧縮方式とファイルの大きさが変わる(例: 無圧縮の 9,356 バイト → 646 バイト)。
+
+## JPEG XR
+### ファイル仕様
+- JPEG XR(ITU-T T.832 / ISO/IEC 29199-2)には、読み込むときに回転・反転する指定がある(WIC の資料: 書き出しのオプション BitmapTransform「読み込むときに画像を回転または反転するか」)。
+- 圧縮したデータのまま回転・反転・切り抜きができる(WIC の資料: Compressed Domain Transcode)。
+### imageviewer の動作仕様
+- 開いたとき: WIC が回転・反転をかけた画像を返すので、それを表示する。
+- 保存したとき: 画素単位で回転して、可逆の設定(Lossless)で圧縮し直す。
+### imageviewer の保存時の副作用
+- 元が劣化ありの設定で圧縮されていたファイルは、可逆の設定で保存し直すので、ファイルが大きくなることがある(未確認。テストしたのは可逆の設定のファイルだけ)。
+
+## ICO / DDS
+### ファイル仕様
+- ICO と DDS では、画像の回転情報を保持するための仕様は存在しない。
+### imageviewer の動作仕様
+- 開いたとき: 保存された並びのまま表示する(ICO は一番大きい画像)。
+- 保存したとき: 保存できない(保存ボタンを押せない)。
+### imageviewer の保存時の副作用
+-
+
+## 出典
+- PNG: [Portable Network Graphics (PNG) Specification (Third Edition), W3C](https://www.w3.org/TR/png-3/) 11.3.4.5 節
+- WebP: [RFC 9649: WebP Image Format](https://www.rfc-editor.org/rfc/rfc9649.html) 2.7.1.5 節
+- JPEG XR: [JPEG XR Codec Overview, Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/wic/jpeg-xr-codec)
+- HEIF / MIAF(二次情報): [libavif の exif.c](https://aomedia.googlesource.com/libavif/+/refs/heads/main/src/exif.c)、[pillow-heif: workaround orientation](https://pillow-heif.readthedocs.io/en/latest/_sources/workaround-orientation.rst.txt)
+- TIFF(二次情報): [TIFF Tag Orientation, AWare Systems](https://awaresystems.be/imaging/tiff/tifftags/orientation.html)
+
+## 付記: EXIF の向きの扱い(2026/11/1 の状況)
+
+### 仕様
+
+| 形式 | 形式そのものの仕様 | ブラウザの表示の仕様(CSS Images 3) |
+|---|---|---|
+| JPEG | JPEG 自体には向きの仕様がない。向きは EXIF の仕様(JEITA CP-3451)の Orientation で表す | 向きの付属情報(EXIF など)があれば従う。EXIF は画像データより前(APP1)にあるので、従う対象になる |
+| PNG | eXIf の中身は、正しいと分かっている場合を除いて「過去の記録」として扱うことを勧める(11.3.4.5 節)。向きについての記述はない | 同じく従う。ただし、画像データより後ろにある向きの情報は無視するべき(2.1.2 節)。eXIf が IDAT より前なら従い、後ろなら無視する |
+| WebP | EXIF チャンクを入れてよい。表示に影響するかどうかは書いていない。決まった順番では、EXIF は画像データの後ろ(順番を変えてもよい)(2.7 節) | 向きの付属情報(EXIF など)があれば従う。ただし、画像データより後ろにある向きの情報は無視するべき(2.1.2 節) |
+
+- CSS の `image-orientation` は、仕様の上では「対応してもしなくてもよい」機能。初期値は `from-image`(付属情報に従う)。以前の初期値は `none`。
+
+### 現状
+
+ブラウザの情報は 2020〜2022 年の記事とバグ報告による。2026/11/1 の時点では確かめていない。
+
+| アプリ | JPEG | PNG | WebP |
+|---|---|---|---|
+| ファイルの仕様 | 従う | 従わない(PNG 11.3.4.5 節: EXIF は「過去の記録」として扱うことを勧める) | 決まっていない |
+| CSS の仕様 | 従う | ⚠️従う(eXIf チャンクが IDAT チャンクより前にあるとき)<br>従わない(eXIf チャンクが IDAT チャンクより後ろにあるとき) | 従う(EXIF チャンクが画像データより前にあるとき)<br>従わない(EXIF チャンクが画像データより後ろにあるとき) |
+| Chrome | 従う | 従わない | 従わない |
+| Firefox | 従う | 従わない | 従わない |
+| Safari | 従う | 従わない(eXIf チャンクが IDAT チャンクより後ろにあるとき)<br>⚠️従う(eXIf チャンクが画像データの IDAT チャンクより前にあるとき) | 従わない |
+| Windows Imaging Component | 従う | 従わない | 従う(EXIF チャンクが画像データより後ろにあるとき)<br>未確認(EXIF チャンクが画像データより前にあるとき) |
+
+- ⚠️: 「ファイルの仕様」の行と違うもの。
+- Windows Imaging Component の行は、imageviewer で試した結果。
+
+### 仕様と現状が食い違っているところ
+- ファイルの仕様と違う: Safari は、PNG の eXIf(IDAT より前のもの)の向きに従う。
+- CSS の仕様と違う: Chrome と Firefox は、PNG の eXIf(IDAT より前のもの)の向きに従わない。
+
+### 出典
+- [CSS Images Module Level 3, W3C](https://www.w3.org/TR/css-images-3/) 5.1 節、2.1.2 節
+- [Portable Network Graphics (PNG) Specification (Third Edition), W3C](https://www.w3.org/TR/png-3/) 11.3.4.5 節
+- [RFC 9649: WebP Image Format](https://www.rfc-editor.org/rfc/rfc9649.html) 2.7 節
+- [EXIF orientation in different formats (Tuomas Siipola, 2020-08-26, 2021-10-07 更新)](https://zpl.fi/exif-orientation-in-different-formats/)
+- [Mozilla Bug 1627423](https://bugzilla.mozilla.org/show_bug.cgi?id=1627423)
+- [WebKit Bug 210021](https://bugs.webkit.org/show_bug.cgi?id=210021)
