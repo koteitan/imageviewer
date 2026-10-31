@@ -98,7 +98,13 @@ internal sealed class InfoPopup : Window
         Title = "imageviewer";
         Content = new Border { Child = card, Padding = new Thickness(ShadowMargin), Background = Brushes.Transparent };
         new WindowInteropHelper(this).Owner = owner.Handle;
-        Deactivated += (_, _) => Hide();
+        // Hide after the activation change has finished. Hiding the window while Windows is still
+        // switching the active window makes Windows pick another app's window to activate
+        // (the viewer that was clicked then falls behind it).
+        Deactivated += (_, _) => Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!IsActive) Hide();
+        }));
     }
 
     /// <summary>Show with the card's top-left corner at the mouse cursor, kept inside the work area.</summary>
