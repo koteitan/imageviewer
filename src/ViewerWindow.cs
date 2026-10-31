@@ -78,7 +78,12 @@ internal sealed class ViewerWindow : Window
         PlaceCentered(cursor.X, cursor.Y, cursor.X, cursor.Y);
     }
 
-    /// <summary>Allow windows larger than the screen.</summary>
+    /// <summary>
+    /// Allow windows smaller than the system minimum and larger than the screen.
+    /// The message is not marked handled: WPF's own handler must read these limits too,
+    /// otherwise WPF lays out the content with the default limits
+    /// (image stretched in tiny windows, black area in windows larger than the screen).
+    /// </summary>
     private IntPtr WndProc(IntPtr h, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == Native.WM_GETMINMAXINFO)
@@ -87,7 +92,6 @@ internal sealed class ViewerWindow : Window
             mmi.ptMinTrackSize = new Native.POINT { X = 1, Y = 1 };
             mmi.ptMaxTrackSize = new Native.POINT { X = MaxSidePx, Y = MaxSidePx };
             Marshal.StructureToPtr(mmi, lParam, false);
-            handled = true;
         }
         return IntPtr.Zero;
     }
@@ -268,7 +272,7 @@ internal sealed class ViewerWindow : Window
     private void ShowBitmap()
     {
         image.Source = bitmap;
-        Title = $"{Path.GetFileName(path)} - ImageViewer";
+        Title = $"{Path.GetFileName(path)} - imageviewer";
         try { lastKnownWriteTime = File.GetLastWriteTimeUtc(path); } catch (Exception) { }
     }
 

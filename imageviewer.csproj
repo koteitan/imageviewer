@@ -6,11 +6,12 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <OutputType>WinExe</OutputType>
     <RootNamespace>ImageViewer</RootNamespace>
-    <AssemblyName>ImageViewer</AssemblyName>
+    <AssemblyName>imageviewer</AssemblyName>
     <TargetFrameworkVersion>v4.8.1</TargetFrameworkVersion>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <Prefer32Bit>false</Prefer32Bit>
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
@@ -39,6 +40,18 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.manifest" />
+    <None Include="icon.ico" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Release builds are copied to a local folder. Running the exe from \\wsl.localhost
+       makes Windows show the "publisher could not be verified" warning every time.
+       Override with -p:DeployDir=...; -p:DeployDir=none skips the copy. -->
+  <PropertyGroup>
+    <DeployDir Condition=" '$(DeployDir)' == '' ">C:\app\imageviewer\</DeployDir>
+  </PropertyGroup>
+  <Target Name="Deploy" AfterTargets="Build" Condition=" '$(Configuration)' == 'Release' And '$(DeployDir)' != 'none' ">
+    <MakeDir Directories="$(DeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DeployDir)" Retries="3" RetryDelayMilliseconds="500" />
+    <Message Importance="high" Text="  deployed -> $(DeployDir)$(TargetFileName)" />
+  </Target>
 </Project>

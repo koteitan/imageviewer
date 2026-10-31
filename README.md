@@ -1,11 +1,11 @@
-# ImageViewer
+# imageviewer
 
 Windows 11 用の、縁なしの画像ビューアです。ウィンドウの大きさが画像の大きさと同じになります。
 
 ## 使い方
 
 ```
-ImageViewer.exe [画像ファイル]
+imageviewer.exe [画像ファイル]
 ```
 
 - 引数なしで起動すると、ファイル選択画面が出ます。
@@ -16,7 +16,7 @@ ImageViewer.exe [画像ファイル]
 | 左ドラッグ | ウィンドウを動かす |
 | ホイール | 拡大縮小(カーソルの位置が中心、1 目盛り 1.1 倍) |
 | → / ← | 同じフォルダの、更新日が新しい / 古い画像に切り替え |
-| 右クリック | 拡大率・ファイル名・フルパス・ペイントで開く のビュー |
+| 右クリック | 拡大率(100% に戻すボタン付き)・ファイル名・フルパス・ペイントで開く のビュー |
 | Esc | 閉じる |
 
 最初のウィンドウの大きさ:
@@ -32,7 +32,12 @@ ImageViewer.exe [画像ファイル]
 - Windows: `build.bat`
 - WSL: `./build.sh`
 
-出力: `bin\Release\ImageViewer.exe`(.NET Framework 4.8.1 は Windows 11 に最初から入っているので、exe 1 つで動きます)
+出力: `bin\Release\imageviewer.exe`(.NET Framework 4.8.1 は Windows 11 に最初から入っているので、exe 1 つで動きます)
+
+Release ビルドのあと、exe は `C:\app\imageviewer\imageviewer.exe` にコピーされます。こちらを使ってください。WSL の中(`\\wsl.localhost\...`)の exe を直接動かすと、Windows が「作成者を確認できません」の確認を毎回出します。
+
+- コピー先を変える: `-p:DeployDir=D:\tools\imageviewer\`
+- コピーしない: `-p:DeployDir=none`
 
 ## ファイル
 
@@ -41,3 +46,4 @@ ImageViewer.exe [画像ファイル]
 - `src/InfoPopup.cs` 右クリックビュー
 - `src/ImageLoader.cs` 画像の読み込み、EXIF の回転、フォルダ内の一覧
 - `src/Native.cs` Win32 の呼び出し
+- `icon.ico` アプリのアイコン。`python3 tools/make_icon.py` で作り直せます(Pillow と Consolas Bold を使います)

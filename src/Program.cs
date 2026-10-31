@@ -7,7 +7,7 @@ namespace ImageViewer;
 
 internal static class Program
 {
-    /// <summary>Usage: ImageViewer.exe [image file]. Without an argument a file dialog opens.</summary>
+    /// <summary>Usage: imageviewer.exe [image file]. Without an argument a file dialog opens.</summary>
     [STAThread]
     private static int Main(string[] args)
     {
@@ -38,5 +38,5 @@ internal static class Program
     }
 
     public static void ShowLoadError(string path, Exception ex) =>
-        MessageBox.Show($"画像を開けませんでした。\n{path}\n\n{ex.Message}", "ImageViewer", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show($"画像を開けませんでした。\n{path}\n\n{ex.Message}", "imageviewer", MessageBoxButton.OK, MessageBoxImage.Error);
 }
