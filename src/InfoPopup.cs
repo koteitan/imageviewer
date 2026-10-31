@@ -4,8 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
@@ -22,10 +22,10 @@ namespace ImageViewer;
 /// ペイントで開く: [開く]
 /// </code>
 /// </summary>
-internal sealed class InfoPopup
+internal sealed class InfoPopup : Window
 {
+    private const double ShadowMargin = 14;     // transparent margin around the card for the drop shadow
     private readonly ViewerWindow owner;
-    private readonly Popup popup;
     private readonly ResourceDictionary theme = LoadTheme();
     private readonly TextBox zoomBox;
     private readonly TextBox nameBox;
@@ -84,36 +84,51 @@ internal sealed class InfoPopup
         TextElementProps(card);
         card.PreviewKeyDown += (_, e) =>
         {
-            if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+            if (e.Key == Key.Escape) { HideAndReturn(); e.Handled = true; }
         };
 
-        popup = new Popup
-        {
-            // transparent margin around the card holds the drop shadow
-            Child = new Border { Child = card, Padding = new Thickness(14), Background = Brushes.Transparent },
-            AllowsTransparency = true,
-            PopupAnimation = PopupAnimation.Fade,
-            PlacementTarget = owner,
-            Placement = PlacementMode.MousePoint,
-            HorizontalOffset = -14,
-            VerticalOffset = -14,
-            StaysOpen = false,
-        };
+        // A small borderless window owned by the viewer; it hides when it loses focus.
+        WindowStyle = WindowStyle.None;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        ResizeMode = ResizeMode.NoResize;
+        ShowInTaskbar = false;
+        SizeToContent = SizeToContent.WidthAndHeight;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Title = "imageviewer";
+        Content = new Border { Child = card, Padding = new Thickness(ShadowMargin), Background = Brushes.Transparent };
+        new WindowInteropHelper(this).Owner = owner.Handle;
+        Deactivated += (_, _) => Hide();
     }
 
-    public bool IsOpen => popup.IsOpen;
-
+    /// <summary>Show with the card's top-left corner at the mouse cursor, kept inside the work area.</summary>
     public void Open()
     {
         RefreshZoom();
         nameBox.Text = Path.GetFileName(owner.FilePath);
         pathBox.Text = owner.FilePath;
-        popup.IsOpen = true;
+
+        Opacity = 0; // invisible until it is at the right place
+        Show();
+        Activate();
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        Native.GetWindowRect(handle, out var r);
+        Native.GetCursorPos(out var c);
+        int m = (int)Math.Round(ShadowMargin * VisualTreeHelper.GetDpi(this).DpiScaleX);
+        var work = Native.WorkAreaAt(c.X, c.Y);
+        int px = Math.Max(work.Left - m, Math.Min(work.Right + m - r.Width, c.X - m));
+        int py = Math.Max(work.Top - m, Math.Min(work.Bottom + m - r.Height, c.Y - m));
+        Native.SetWindowPos(handle, IntPtr.Zero, px, py, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+        Opacity = 1;
         zoomBox.Focus();
         zoomBox.SelectAll();
     }
 
-    private void Close() => popup.IsOpen = false;
+    private void HideAndReturn()
+    {
+        Hide();
+        owner.Activate();
+    }
 
     private void RefreshZoom()
     {
@@ -136,14 +151,14 @@ internal sealed class InfoPopup
 
     private void OpenInPaint()
     {
-        Close();
+        Hide();
         try
         {
             Process.Start(new ProcessStartInfo("mspaint.exe", $"\"{owner.FilePath}\"") { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            MessageBox.Show(owner, $"ペイントを起動できませんでした。\n\n{ex.Message}", "imageviewer", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show($"ペイントを起動できませんでした。\n\n{ex.Message}", "imageviewer", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 

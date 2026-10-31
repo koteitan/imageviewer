@@ -11,7 +11,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        // The viewer is a Win32 window, not a WPF Window: it shuts the app down itself (WM_DESTROY).
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
 
         string? path = args.Length > 0 ? args[0] : AskFile();
         if (path is null) return 0;
@@ -28,7 +29,8 @@ internal static class Program
             return 1;
         }
 
-        return app.Run(new ViewerWindow(path, bitmap));
+        new ViewerWindow(path, bitmap).Show();
+        return app.Run();
     }
 
     private static string? AskFile()
